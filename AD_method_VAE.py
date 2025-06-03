@@ -1,3 +1,4 @@
+# pip install numpy pandas matplotlib scikit-learn torch PyQt5 tqdm
 # https://adamoudad.github.io/posts/ecg-anomaly-detection/
 import pandas as pd
 import numpy as np
@@ -38,45 +39,60 @@ plt.legend()
 plt.savefig("ecg_mean.png")
 plt.show()
 
-# Encoder definition
+# VAE Encoder
 class Encoder(torch.nn.Module):
-    def __init__(self, input_size=140):
+    def __init__(self, input_size=140, latent_dim=8):
         super(Encoder, self).__init__()
-        self.enc1 = torch.nn.Linear(input_size, 32)
-        self.enc2 = torch.nn.Linear(32, 16)
-        self.enc3 = torch.nn.Linear(16, 8)
+        self.fc1 = torch.nn.Linear(input_size, 32)
+        self.fc2 = torch.nn.Linear(32, 16)
+        self.fc_mu = torch.nn.Linear(16, latent_dim)
+        self.fc_logvar = torch.nn.Linear(16, latent_dim)
 
     def forward(self, x):
-        x = torch.relu(self.enc1(x))
-        x = torch.relu(self.enc2(x))
-        x = torch.relu(self.enc3(x))
-        return x
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        mu = self.fc_mu(x)
+        logvar = self.fc_logvar(x)
+        return mu, logvar
 
-# Decoder definition
+# VAE Decoder
 class Decoder(torch.nn.Module):
-    def __init__(self, output_size=140):
+    def __init__(self, latent_dim=8, output_size=140):
         super(Decoder, self).__init__()
-        self.dec1 = torch.nn.Linear(8, 16)
-        self.dec2 = torch.nn.Linear(16, 32)
-        self.dec3 = torch.nn.Linear(32, output_size)
+        self.fc1 = torch.nn.Linear(latent_dim, 16)
+        self.fc2 = torch.nn.Linear(16, 32)
+        self.fc3 = torch.nn.Linear(32, output_size)
+
+    def forward(self, z):
+        z = torch.relu(self.fc1(z))
+        z = torch.relu(self.fc2(z))
+        z = torch.sigmoid(self.fc3(z))
+        return z
+
+# VAE Model
+class VAE(torch.nn.Module):
+    def __init__(self, input_size=140, latent_dim=8):
+        super(VAE, self).__init__()
+        self.encoder = Encoder(input_size, latent_dim)
+        self.decoder = Decoder(latent_dim, input_size)
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
 
     def forward(self, x):
-        x = torch.relu(self.dec1(x))
-        x = torch.relu(self.dec2(x))
-        x = torch.sigmoid(self.dec3(x))
-        return x
+        mu, logvar = self.encoder(x)
+        z = self.reparameterize(mu, logvar)
+        recon_x = self.decoder(z)
+        return recon_x, mu, logvar
 
-# Autoencoder using Encoder and Decoder
-class Autoencoder(torch.nn.Module):
-    def __init__(self, input_size=140):
-        super(Autoencoder, self).__init__()
-        self.encoder = Encoder(input_size)
-        self.decoder = Decoder(input_size)
-
-    def forward(self, x):
-        x = self.encoder(x)
-        x = self.decoder(x)
-        return x
+# VAE loss function
+def vae_loss(recon_x, x, mu, logvar):
+    recon_loss = torch.nn.functional.l1_loss(recon_x, x, reduction='sum')
+    # KL divergence
+    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    return recon_loss + kl_loss
 
 # Data split function
 def train_test_split(data, labels, test_size=0.2, random_state=None):
@@ -103,27 +119,24 @@ test_labels = test_labels.astype(bool)
 normal_train_data = train_data[train_labels]
 normal_test_data = test_data[test_labels]
 
-# Training setup
-batch_size = 32
+# Replace Autoencoder with VAE
+vae = VAE().to(device)
+optimizer = torch.optim.Adam(vae.parameters())
 epochs = 100
+batch_size = 32
 losses = []
 
-autoencoder = Autoencoder().to(device)
-optimizer = torch.optim.Adam(autoencoder.parameters())
-criterion = torch.nn.L1Loss()
-
-n_batches = len(normal_train_data) // batch_size
-
 # Training loop
-autoencoder.train()
+vae.train()
+n_batches = len(normal_train_data) // batch_size
 with trange(epochs) as tbar:
     for epoch in tbar:
         epoch_loss = 0.
         for i in range(0, len(normal_train_data), batch_size):
             batch = normal_train_data[i:i+batch_size]
             optimizer.zero_grad()
-            outputs = autoencoder(batch)
-            loss = criterion(outputs, batch)
+            recon_batch, mu, logvar = vae(batch)
+            loss = vae_loss(recon_batch, batch, mu, logvar)
             epoch_loss += loss.item()
             loss.backward()
             optimizer.step()
@@ -135,18 +148,18 @@ plt.figure()
 plt.plot(losses, label="Training Loss")
 plt.xlabel("Epoch")
 plt.ylabel("Loss")
-plt.title("Autoencoder Training Loss Curve")
+plt.title("VAE Training Loss Curve")
 plt.legend()
-plt.savefig("training_loss_curve.png")
+plt.savefig("vae_training_loss_curve.png")
 plt.show()
 
 # Evaluation
-autoencoder.eval()
+vae.eval()
 with torch.no_grad():
-    reconstructed = autoencoder(test_data)
-    reconstruction_error = torch.mean(torch.abs(reconstructed - test_data), dim=1).cpu().numpy()
-    train_recon = autoencoder(normal_train_data)
-    train_error = torch.mean(torch.abs(train_recon - normal_train_data), dim=1).cpu().numpy()
+    recon_test, mu, logvar = vae(test_data)
+    reconstruction_error = torch.mean(torch.abs(recon_test - test_data), dim=1).cpu().numpy()
+    recon_train, mu_train, logvar_train = vae(normal_train_data)
+    train_error = torch.mean(torch.abs(recon_train - normal_train_data), dim=1).cpu().numpy()
 
 threshold = np.percentile(train_error, 95)
 y_pred = (reconstruction_error < threshold).astype(int)
@@ -158,7 +171,7 @@ cm = confusion_matrix(y_true, y_pred)
 disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Abnormal", "Normal"])
 disp.plot(cmap=plt.cm.Blues)
 plt.title("Confusion Matrix")
-plt.savefig("confusion_matrix.png")  # Save the confusion matrix plot
+plt.savefig("vae_confusion_matrix.png")
 plt.show()
 
 

@@ -1,4 +1,4 @@
-# pip install numpy pandas matplotlib scikit-learn torch tk PyQt5
+# pip install numpy pandas matplotlib scikit-learn torch PyQt5 tqdm
 # dataset from:
 # https://www.cs.ucr.edu/~eamonn/time_series_data_2018/
 # http://storage.googleapis.com/download.tensorflow.org/data/ecg.csv
